@@ -1,0 +1,127 @@
+version: '3'
+
+services:
+    clickhouse:
+        image: yandex/clickhouse-server
+        ports:
+            - 8123:8123
+            - 9000:9000
+        volumes:
+            - ./services/clickhouse/data:/var/lib/clickhouse
+
+    redis:
+        image: 'redis:5.0.5'
+        ports:
+            - 6379:6379
+        volumes:
+            - ./services/redis/redis.conf:/usr/local/etc/redis/redis.conf
+            - ./services/redis/data:/data
+        # command: redis-server --requirepass redispass
+
+    tabix:
+        image: spoonest/clickhouse-tabix-web-client
+        restart: unless-stopped
+        links:
+            - clickhouse
+        ports:
+            - 8090:80
+
+    postgres:
+        image: postgres:9.6
+        environment:
+            - POSTGRES_USER=airflow
+            - POSTGRES_PASSWORD=airflow
+            - POSTGRES_DB=airflow
+            - PGDATA=/var/lib/postgresql/data/pgdata
+        ports:
+            - "5432:5432"
+        volumes:
+            - ./services/postgres/data:/var/lib/postgresql/data/pgdata
+
+        # Uncomment these lines to persist data on the local filesystem.
+        #     - PGDATA=/var/lib/postgresql/data/pgdata
+        # volumes:
+        #     - ./pgdata:/var/lib/postgresql/data/pgdata
+
+    webserver:
+#         image: puckel/docker-airflow:1.10.9
+        build: ./services/airflow
+        restart: always
+        depends_on:
+            - postgres
+            - redis
+        environment:
+            - LOAD_EX=n
+            - FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+            - EXECUTOR=Celery
+            # - POSTGRES_USER=airflow
+            # - POSTGRES_PASSWORD=airflow
+            # - POSTGRES_DB=airflow
+            # - REDIS_PASSWORD=redispass
+        volumes:
+            - ./services/airflow/dags:/usr/local/airflow/dags
+            - ./services/airflow/plugins:/usr/local/airflow/plugins
+            - ./services/airflow/tmp:/usr/local/airflow/tmp
+            - ./services/airflow/data:/usr/local/airflow/data
+        ports:
+            - "8080:8080"
+        command: webserver
+        healthcheck:
+            test: ["CMD-SHELL", "[ -f /usr/local/airflow/airflow-webserver.pid ]"]
+            interval: 30s
+            timeout: 30s
+            retries: 3
+
+    flower:
+#         image: puckel/docker-airflow:1.10.9
+        build: ./services/airflow
+        restart: always
+        depends_on:
+            - redis
+        environment:
+            - EXECUTOR=Celery
+            # - REDIS_PASSWORD=redispass
+        ports:
+            - "5555:5555"
+        command: flower
+
+    scheduler:
+#         image: puckel/docker-airflow:1.10.9
+        build: ./services/airflow
+        restart: always
+        depends_on:
+            - webserver
+        volumes:
+            - ./services/airflow/dags:/usr/local/airflow/dags
+            - ./services/airflow/plugins:/usr/local/airflow/plugins
+            - ./services/airflow/tmp:/usr/local/airflow/tmp
+            - ./services/airflow/data:/usr/local/airflow/data
+        environment:
+            - LOAD_EX=n
+            - FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+            - EXECUTOR=Celery
+            # - POSTGRES_USER=airflow
+            # - POSTGRES_PASSWORD=airflow
+            # - POSTGRES_DB=airflow
+            # - REDIS_PASSWORD=redispass
+        command: scheduler
+
+    worker:
+#         image: puckel/docker-airflow:1.10.9
+        build: ./services/airflow
+        restart: always
+        depends_on:
+            - scheduler
+        volumes:
+            - ./services/airflow/dags:/usr/local/airflow/dags
+            - ./services/airflow/plugins:/usr/local/airflow/plugins
+            - ./services/airflow/tmp:/usr/local/airflow/tmp
+            - ./services/airflow/data:/usr/local/airflow/data
+        environment:
+            - FERNET_KEY=46BKJoQYlPPOexq0OhDZnIlNepKFf87WFwLbfzqDDho=
+            - EXECUTOR=Celery
+            # - POSTGRES_USER=airflow
+            # - POSTGRES_PASSWORD=airflow
+            # - POSTGRES_DB=airflow
+            # - REDIS_PASSWORD=redispass
+        command: worker
