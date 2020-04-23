@@ -9,16 +9,19 @@ from airflow.operators.python_operator import PythonOperator
 # from math import ceil
 
 
-
+seven_days_ago = datetime.combine(datetime.today() - timedelta(7),
+                                  datetime.min.time())
 
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
-    "start_date": datetime.now(),
+    # "start_date": datetime.now(),
+    "start_date": seven_days_ago,
     "email": ["airflow@airflow.com"],
     "email_on_failure": False,
     "email_on_retry": False,
     "retries": 1,
+    "max_active_runs": 5,
     "retry_delay": timedelta(minutes=5),
     # 'queue': 'bash_queue',
     # 'pool': 'backfill',
@@ -42,7 +45,8 @@ print(BASE_DIR)
 
 with DAG("test_dag",
          default_args=default_args,
-         schedule_interval='* * * * *') as dag:
+         # schedule_interval='*/5 * * * *') as dag:
+         schedule_interval=None) as dag:
 
 
     load_data = PythonOperator(
@@ -57,7 +61,7 @@ with DAG("test_dag",
         python_callable=action2
     )
 
-    # load_data.set_downstream(collect_data)
+# load_data.set_downstream(collect_data)
 load_data >> collect_data
 # import requests
 # import json
@@ -87,3 +91,11 @@ load_data >> collect_data
 # client = Client('localhost')
 # print(client.execute('truncate table eventdata.events_buf'))
 # print(client.execute('truncate table eventdata.events'))
+import logging
+print(datetime.utcnow())
+
+logging.info('info')
+logging.debug('debug')
+logging.warning('warn')
+logging.error('error')
+logging.critical('critical')
