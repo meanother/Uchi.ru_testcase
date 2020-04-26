@@ -1,25 +1,27 @@
 import json
+import logging
+import os
+from datetime import datetime, timedelta
+from math import ceil
+from multiprocessing import Pool
+
 import requests
 from airflow import DAG
-from datetime import datetime, timedelta
-from clickhouse_driver import Client
 from airflow.operators.python_operator import PythonOperator
-from data_models import database, Events_buf, Events
-from multiprocessing import Pool
-from math import ceil
+from clickhouse_driver import Client
+from data_models import database, Events_buf
 
-
-# client = Client(host='127.0.0.1')
-# client = Client('127.0.0.1')
-# client = Client('http://localhost:9000')
-client = Client('localhost')
 reg_format_date = datetime.now().strftime("_%Y-%m-%d_%I-%M-%S")
+seven_days_ago = datetime.combine(datetime.today() - timedelta(3), datetime.min.time())
 
+# BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__)) + os.path.sep
 
 default_args = {
     "owner": "airflow",
     "depends_on_past": False,
-    "start_date": datetime.now(),
+    # "start_date": datetime.utcnow(),
+    "start_date": seven_days_ago,
     "email": ["airflow@airflow.com"],
     "email_on_failure": False,
     "email_on_retry": False,
@@ -32,34 +34,45 @@ default_args = {
 }
 
 
-# d_date = datetime.now()
+# TODO: MAKE A TIMER
+# TODO: MAKE A ANOTHER METHOD INSERT DATA
+# TODO CHANGE DATETIME REGION
 
 
 def download_file(url):
-
     response = requests.get(url, stream=True)
+    logging.info('this is default base dir: ' + str(BASE_DIR))
     if response.status_code == 200:
-        with open(f'datafile{reg_format_date}.json', 'wb') as jsonfile:
-            for chunk in response.iter_content(chunk_size=1024 * 36):
+        logging.info('starting to download json file from yandex disk')
+        with open(BASE_DIR + f'datafile{reg_format_date}.json', 'wb') as jsonfile:
+            # TODO FULL FILE NAME EARLIER THEN >> WITH AS BECAUSE FILE SAVE IN /m BUT RETURN FULL PATH
+            for chunk in response.iter_content(chunk_size=1024 * 36 * 512):
                 if chunk:
                     jsonfile.write(chunk)
                     jsonfile.flush()
-    return jsonfile
+                    logging.info(f'flush chunk with size: {str((1024 * 36 * 512) / 1024 / 1024)} mb!')
+    else:
+        logging.error('close connect by invalid response server: ' + str(response.status_code))
+        return False
+    # TODO add time for download
+    logging.info('finish download json file')
+    return jsonfile.name
 
 
-def get_raw_data():
-# def get_raw_data(file):
-    # with open(file, 'r') as readfile:
-    # with open('datafile-2020-04-21_12-37-28.json', 'r') as readfile:
-    with open('datafile_2020-04-21_12-37-28.json', 'r') as readfile:
+def get_raw_data(file):
+    logging.info('started prepare dataset from json file')
+    with open(file, 'r') as readfile:
+        logging.info('parse json file')
         data = [Events_buf(**json.loads(i.strip())) for i in readfile.readlines()]
         # database.insert(data)
+    logging.info('dataset is ready to insert to buf table')
     return data
 
 
 def parting(list):
-    part_len = ceil(len(list)/5)
-    return [list[part_len*k:part_len*(k+1)] for k in range(5)]
+    logging.info('cut the list rows')
+    part_len = ceil(len(list) / 5)
+    return [list[part_len * k:part_len * (k + 1)] for k in range(5)]
 
 
 def insert(data):
@@ -67,53 +80,38 @@ def insert(data):
 
 
 def insert_rawdata():
-    url = 'https://downloader.disk.yandex.ru/disk/d2c3c369a04f3368d117c3d06b5b0e319a3cb027c887ecc66319b72716cf59b9/5e9e4ca4/ktmvbmxs_zpIM4Z6o0NyqHpJ8l3qQgq2pkNZUcbRIjddCjG3yG407g4SRHbNQM1W-WWU1lmblgkjaxr4QBqtBw%3D%3D?uid=0&filename=event-data.json&disposition=attachment&hash=g2bRMWmdwB4RfjYLiYcxGBQMAZimnMYxlFQT0nH7zc6EIDSE7Z7xfNZRY23w%2BG/Cq/J6bpmRyOJonT3VoXnDag%3D%3D&limit=0&content_type=text%2Fplain&owner_uid=98963981&fsize=242618312&hid=2e6b145256a04c498b93fc9ede8f2597&media_type=text&tknv=v2'
-    # data = parting(get_raw_data(download_file(url)))
-    data = parting(get_raw_data())
-    with Pool(5) as pool:
+    logging.info('start inserting data')
+    url = 'https://downloader.disk.yandex.ru/disk/81590a98ae2d229706b093ba8f6d39722a2b15db1fd2083ceffac1d79c755a39/5ea230a0/ktmvbmxs_zpIM4Z6o0NyqHpJ8l3qQgq2pkNZUcbRIjddCjG3yG407g4SRHbNQM1W-WWU1lmblgkjaxr4QBqtBw%3D%3D?uid=0&filename=event-data.json&disposition=attachment&hash=g2bRMWmdwB4RfjYLiYcxGBQMAZimnMYxlFQT0nH7zc6EIDSE7Z7xfNZRY23w%2BG/Cq/J6bpmRyOJonT3VoXnDag%3D%3D&limit=0&content_type=text%2Fplain&owner_uid=98963981&fsize=242618312&hid=2e6b145256a04c498b93fc9ede8f2597&media_type=text&tknv=v2'
+    data = parting(get_raw_data(download_file(url)))
+    with Pool(3) as pool:
+        logging.warning('MAP WITH POOL AS 5 WORKERS')
         pool.map(insert, data)
+    logging.info('finish insert data to BUF table')
+
 
 def transfer_data():
-    client.execute('''
-    INSERT into eventdata.events select 
-    toDateTime(ts/1000)
-    , userId
-    , sessionId 
-    , page 
-    , auth 
-    , method
-    , status 
-    , level
-    , itemInSession 
-    , userAgent 
-    , location 
-    , lastName 
-    , firstName 
-    , registration 
-    , gender 
-    , artist 
-    , song
-    , length
-    from eventdata.events_buf
-    ''')
+    client = Client('clickhouse')
+    logging.info('Start insert data from BUF table to MAIN table')
+    with open(BASE_DIR + 'from_buf.sql', 'r') as file:
+        insert = file.read()
+        client.execute(insert)
+    logging.info('finish insert data to main table')
+    logging.warning('Truncate BUF table')
     client.execute('truncate table eventdata.events_buf')
 
 
-insert_rawdata()
-transfer_data()
-
-# with dag()
-with DAG("example_airflow", default_args=default_args, schedule_interval=timedelta(1)) as dag:
+with DAG("example_airflow", default_args=default_args, schedule_interval=None) as dag:
     load_data = PythonOperator(
         task_id='load_raw_data',
-        provide_context=True,
+        provide_context=False,
         python_callable=insert_rawdata
     )
 
     collect_data = PythonOperator(
         task_id='transfer_data',
-        provide_context=True,
+        provide_context=False,
         python_callable=transfer_data
     )
 
-    load_data.set_downstream(collect_data)
+load_data.set_downstream(collect_data)
+# load_data >> collect_data

@@ -64,7 +64,8 @@ class Events(Model):
     )
 
 
-database = Database('eventdata')
+database = Database('eventdata', db_url='http://clickhouse:8123')
+# database = Database('eventdata')
 
 database.create_table(Events_buf)
 database.create_table(Events)
